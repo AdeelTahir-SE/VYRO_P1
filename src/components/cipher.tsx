@@ -337,6 +337,22 @@ function CipherNode({
   const nodeData = data as CipherNodeData;
   const isEditing = editingNodeId === id;
   const [editParams, setEditParams] = useState<NodeParams>(nodeData.params);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
+
+  const handleCopyResult = useCallback(async () => {
+    if (!nodeData.result) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(nodeData.result);
+      setCopyStatus("copied");
+      setTimeout(() => setCopyStatus("idle"), 1200);
+    } catch {
+      setCopyStatus("error");
+      setTimeout(() => setCopyStatus("idle"), 1200);
+    }
+  }, [nodeData.result]);
 
   useEffect(() => {
     if (!isEditing) return;
@@ -458,9 +474,28 @@ function CipherNode({
           <p className="mt-2 text-[9px] text-gray-400 italic">Double-click to edit</p>
           {nodeData.result && (
             <div className="mt-3 rounded bg-amber-50 border border-amber-200 p-2">
-              <p className="text-[10px] font-semibold text-amber-900">
-                {nodeData.isTerminal ? "Final result" : "Intermediate result"}:
-              </p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-semibold text-amber-900">
+                  {nodeData.isTerminal ? "Final result" : "Intermediate result"}:
+                </p>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleCopyResult();
+                  }}
+                  className={`rounded px-2 py-1 text-[10px] font-semibold transition ${
+                    copyStatus === "copied"
+                      ? "bg-green-600 text-white"
+                      : copyStatus === "error"
+                        ? "bg-red-600 text-white"
+                        : "bg-amber-600 text-white hover:bg-amber-700"
+                  }`}
+                  title="Copy node output"
+                >
+                  {copyStatus === "copied" ? "Copied" : copyStatus === "error" ? "Error" : "Copy"}
+                </button>
+              </div>
               <p className="text-xs text-amber-900 font-mono mt-1 break-all">{nodeData.result.substring(0, 40)}{nodeData.result.length > 40 ? "..." : ""}</p>
             </div>
           )}
