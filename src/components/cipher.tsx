@@ -31,6 +31,7 @@ import { xorCipher } from "./cipher_algos/xor";
 
 type AlgorithmId = "caesar" | "vigenere" | "substitution" | "railFence" | "columnar" | "xor";
 type NodeMode = "encrypt" | "decrypt";
+type OutputFormat = "text" | "hex";
 
 type NodeParams = {
   shift: number;
@@ -318,8 +319,19 @@ function identifyTerminalNodes(nodes: PipelineNode[], edges: PipelineEdge[]): Se
   return terminals;
 }
 
+function toHexString(value: string): string {
+  let hex = "";
+
+  for (let i = 0; i < value.length; i += 1) {
+    hex += value.charCodeAt(i).toString(16).padStart(2, "0");
+  }
+
+  return hex;
+}
+
 interface CipherNodeProps extends NodeProps {
   editingNodeId?: string;
+  outputFormat?: OutputFormat;
   onStartEditing?: (nodeId: string) => void;
   onSaveEdit?: (nodeId: string, params: NodeParams) => void;
   onCancelEdit?: () => void;
@@ -330,6 +342,7 @@ function CipherNode({
   selected,
   id,
   editingNodeId,
+  outputFormat = "text",
   onStartEditing,
   onSaveEdit,
   onCancelEdit,
@@ -337,6 +350,8 @@ function CipherNode({
   const nodeData = data as CipherNodeData;
   const isEditing = editingNodeId === id;
   const [editParams, setEditParams] = useState<NodeParams>(nodeData.params);
+  const outputValue = nodeData.result ? (outputFormat === "hex" ? toHexString(nodeData.result) : nodeData.result) : "";
+  const outputLimit = outputFormat === "hex" ? 120 : 40;
 
   useEffect(() => {
     if (!isEditing) return;
@@ -461,7 +476,10 @@ function CipherNode({
               <p className="text-[10px] font-semibold text-amber-900">
                 {nodeData.isTerminal ? "Final result" : "Intermediate result"}:
               </p>
-              <p className="text-xs text-amber-900 font-mono mt-1 wrap-break-word">{nodeData.result.substring(0, 40)}{nodeData.result.length > 40 ? "..." : ""}</p>
+              <p className="mt-1 text-[9px] uppercase tracking-[0.25em] text-amber-700 font-semibold">
+                {outputFormat === "hex" ? "Hex output" : "Text output"}
+              </p>
+              <p className="text-xs text-amber-900 font-mono mt-1 break-all">{outputValue.substring(0, outputLimit)}{outputValue.length > outputLimit ? "..." : ""}</p>
             </div>
           )}
         </>
@@ -499,6 +517,7 @@ function GraphEditor() {
   const [isRunning, setIsRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<"idle" | "success" | "error">("idle");
   const [globalMode, setGlobalMode] = useState<"forward" | "reverse">("forward");
+  const [outputFormat, setOutputFormat] = useState<OutputFormat>("text");
   const [editingNodeId, setEditingNodeId] = useState<string | undefined>(undefined);
   const { screenToFlowPosition } = useReactFlow();
 
@@ -553,13 +572,14 @@ function GraphEditor() {
         <CipherNode
           {...props}
           editingNodeId={editingNodeId}
+          outputFormat={outputFormat}
           onStartEditing={handleStartEditing}
           onSaveEdit={handleSaveEdit}
           onCancelEdit={handleCancelEdit}
         />
       ),
     }),
-    [editingNodeId, handleStartEditing, handleSaveEdit, handleCancelEdit]
+    [editingNodeId, outputFormat, handleStartEditing, handleSaveEdit, handleCancelEdit]
   );
 
   const addNodeToCanvas = useCallback(
@@ -776,6 +796,34 @@ function GraphEditor() {
                 {globalMode === "forward" ? "🔒 Encrypt" : "🔓 Decrypt"}
               </button>
               </div>
+
+            <div className="mt-3">
+              <p className="text-xs text-gray-500 mb-2">Show output as</p>
+              <div className="inline-flex rounded-lg border border-gray-300 bg-white p-1">
+                <button
+                  type="button"
+                  onClick={() => setOutputFormat("text")}
+                  className={`rounded-md px-3 py-1 text-xs font-semibold transition ${
+                    outputFormat === "text"
+                      ? "bg-amber-500 text-white"
+                      : "text-gray-700 hover:bg-gray-100"
+                  }`}
+                >
+                  Text
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOutputFormat("hex")}
+                  className={`rounded-md px-3 py-1 text-xs font-semibold transition ${
+                    outputFormat === "hex"
+                      ? "bg-amber-500 text-white"
+                      : "text-gray-700 hover:bg-gray-100"
+                  }`}
+                >
+                  Hex
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="space-y-2 rounded-2xl border border-gray-300 bg-white p-3 shadow-sm">
