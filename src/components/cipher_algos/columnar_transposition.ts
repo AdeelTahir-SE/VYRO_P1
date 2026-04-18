@@ -1,34 +1,65 @@
-// Rearranges text by writing into rows and
-// reading by column order.
+export type ColumnarMode = "encrypt" | "decrypt";
 
-// Key word (determines column
-// order)
+function buildOrder(keyword: string): number[] {
+    return [...keyword]
+        .map((char, index) => ({ char: char.toUpperCase(), index }))
+        .sort((left, right) => {
+            if (left.char === right.char) {
+                return left.index - right.index;
+            }
 
-export  function columnarTransposition(text: string, key: string) {
-  const numCols = key.length;
-  const numRows = Math.ceil(text.length / numCols);
-  const grid: string[][] = Array.from({ length: numRows }, () =>
-    Array(numCols).fill("")
-  );
-    // Fill the grid row-wise
-    for (let i = 0; i < text.length; i++) {
-        const row = Math.floor(i / numCols);
-        const col = i % numCols;
-        grid[row][col] = text[i];
+            return left.char.localeCompare(right.char);
+        })
+        .map((item) => item.index);
+}
+
+export function columnarTransposition(text: string, key: string, mode: ColumnarMode = "encrypt"): string {
+    const cleanedKey = key.replace(/\s+/g, "").toUpperCase();
+
+    if (cleanedKey.length < 2) {
+        return text;
     }
-    // Create an array of column indices based on the key
-    const columnIndices = [...key]
-        .map((char, index) => ({ char, index }))
-        .sort((a, b) => a.char.localeCompare(b.char))
-        .map(item => item.index);
-    // Read the grid column-wise based on the sorted key
-    let result = "";
-    for (const colIndex of columnIndices) {
-        for (let row = 0; row < numRows; row++) {
-            if (grid[row][colIndex]) {
-                result += grid[row][colIndex];
+
+    const columnCount = cleanedKey.length;
+    const order = buildOrder(cleanedKey);
+
+    if (mode === "encrypt") {
+        const rowCount = Math.ceil(text.length / columnCount);
+        const grid: string[][] = Array.from({ length: rowCount }, () => Array.from({ length: columnCount }, () => ""));
+
+        [...text].forEach((char, index) => {
+            grid[Math.floor(index / columnCount)][index % columnCount] = char;
+        });
+
+        return order
+            .map((columnIndex) => grid.map((row) => row[columnIndex]).join(""))
+            .join("");
+    }
+
+    const rowCount = Math.ceil(text.length / columnCount);
+    const baseLength = Math.floor(text.length / columnCount);
+    const remainder = text.length % columnCount;
+    const columnLengths = Array.from({ length: columnCount }, (_, index) => baseLength + (index < remainder ? 1 : 0));
+    const columns = Array.from({ length: columnCount }, () => "");
+
+    let cursor = 0;
+    order.forEach((columnIndex) => {
+        const length = columnLengths[columnIndex];
+        columns[columnIndex] = text.slice(cursor, cursor + length);
+        cursor += length;
+    });
+
+    const output: string[] = [];
+    for (let row = 0; row < rowCount; row += 1) {
+        for (let column = 0; column < columnCount; column += 1) {
+            const char = columns[column][row];
+            if (char) {
+                output.push(char);
             }
         }
     }
-    return result;
+
+    return output.join("");
 }
+
+export default columnarTransposition;

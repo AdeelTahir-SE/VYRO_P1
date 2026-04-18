@@ -1,11 +1,5 @@
-"use client"
-import { useState,useEffect } from "react"
+import Pipeline from "@/components/cipher";
 
-export default function Page(){
-  
-  return(
-    <section>
-
-    </section>
-  )
+export default function Page() {
+  return <Pipeline />;
 }

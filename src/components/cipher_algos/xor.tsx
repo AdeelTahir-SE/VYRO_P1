@@ -1,14 +1,22 @@
-// XORs each byte of input with a repeating
+export type XorMode = "encrypt" | "decrypt";
 
-// key.
+function normalizeKey(key: string): Uint8Array {
+    const safeKey = key.length > 0 ? key : "0";
+    return new TextEncoder().encode(safeKey);
+}
 
-// Key (string)
-export  function xorCipher(text: string, key: string) {
-    const textBytes = new TextEncoder().encode(text);
-    const keyBytes = new TextEncoder().encode(key);
+export function xorCipher(text: string, key: string, _mode: XorMode = "encrypt"): string {
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const textBytes = encoder.encode(text);
+    const keyBytes = normalizeKey(key);
     const resultBytes = new Uint8Array(textBytes.length);
-    for (let i = 0; i < textBytes.length; i++) {
+
+    for (let i = 0; i < textBytes.length; i += 1) {
         resultBytes[i] = textBytes[i] ^ keyBytes[i % keyBytes.length];
     }
-    return new TextDecoder().decode(resultBytes);
+
+    return decoder.decode(resultBytes);
 }
+
+export default xorCipher;

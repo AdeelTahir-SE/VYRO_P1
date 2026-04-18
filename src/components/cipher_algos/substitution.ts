@@ -1,20 +1,49 @@
-// Replaces each letter using a custom
+export type SubstitutionMode = "encrypt" | "decrypt";
 
-// alphabet mapping.
+const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-// Substitution alphabet (26
-// chars)
-export  function Substitution(text: string, alphabet: string) {
-  const standardAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  const upperText = text.toUpperCase();
-  let result = "";
-    for (const char of upperText) {
-        const index = standardAlphabet.indexOf(char);
-        if (index !== -1) {
-            result += alphabet[index];
-        } else {
-            result += char;
-        }
+function normalizeSubstitutionKey(key: string): string | null {
+    const cleaned = key.toUpperCase().replace(/[^A-Z]/g, "");
+    const uniqueChars = [...new Set(cleaned)].join("");
+
+    if (uniqueChars.length !== 26) {
+        return null;
     }
-    return result;
+
+    return uniqueChars;
 }
+
+function buildMap(from: string, to: string): Map<string, string> {
+    const map = new Map<string, string>();
+    for (let i = 0; i < from.length; i += 1) {
+        map.set(from[i], to[i]);
+    }
+    return map;
+}
+
+export function substitutionCipher(text: string, key: string, mode: SubstitutionMode = "encrypt"): string {
+    const normalizedKey = normalizeSubstitutionKey(key);
+
+    if (!normalizedKey) {
+        return text;
+    }
+
+    const forward = buildMap(ALPHABET, normalizedKey);
+    const reverse = buildMap(normalizedKey, ALPHABET);
+    const map = mode === "encrypt" ? forward : reverse;
+
+    return [...text]
+        .map((char) => {
+            const upper = char.toUpperCase();
+            const mapped = map.get(upper);
+
+            if (!mapped) {
+                return char;
+            }
+
+            return char === upper ? mapped : mapped.toLowerCase();
+        })
+        .join("");
+}
+
+export default substitutionCipher;

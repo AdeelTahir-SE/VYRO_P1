@@ -1,24 +1,43 @@
-// Polyalphabetic substitution using a
+export type VigenereMode = "encrypt" | "decrypt";
 
-// keyword.
+const ALPHABET_SIZE = 26;
 
-// Keyword (string)
-export  function vigenere(text: string, keyword: string) {
-  const upperText = text.toUpperCase();
-  const upperKeyword = keyword.toUpperCase();
-  let result = "";
-  let keywordIndex = 0;
-    for (const char of upperText) {
-        if (char >= "A" && char <= "Z") {
-            const textCharCode = char.charCodeAt(0) - 65;
-            const keywordCharCode = upperKeyword[keywordIndex % upperKeyword.length].charCodeAt(0) - 65;
-            const cipherCharCode = (textCharCode + keywordCharCode) % 26 + 65;
-            result += String.fromCharCode(cipherCharCode);
-            keywordIndex++;
-        }
-        else {
-            result += char;
-        }
-    }
-    return result;
+function isAlphabet(charCode: number): boolean {
+    return (charCode >= 65 && charCode <= 90) || (charCode >= 97 && charCode <= 122);
 }
+
+function getShiftFromKeyChar(keyChar: string): number {
+    return keyChar.toUpperCase().charCodeAt(0) - 65;
+}
+
+export function vigenereCipher(text: string, keyword: string, mode: VigenereMode = "encrypt"): string {
+    const cleanedKey = [...keyword.toUpperCase()].filter((char) => char >= "A" && char <= "Z").join("");
+
+    if (!cleanedKey) {
+        return text;
+    }
+
+    let keywordIndex = 0;
+
+    return [...text]
+        .map((char) => {
+            const code = char.charCodeAt(0);
+
+            if (!isAlphabet(code)) {
+                return char;
+            }
+
+            const isUpper = code >= 65 && code <= 90;
+            const base = isUpper ? 65 : 97;
+            const keyShift = getShiftFromKeyChar(cleanedKey[keywordIndex % cleanedKey.length]);
+            const directionShift = mode === "encrypt" ? keyShift : -keyShift;
+            const normalizedShift = ((directionShift % ALPHABET_SIZE) + ALPHABET_SIZE) % ALPHABET_SIZE;
+
+            keywordIndex += 1;
+
+            return String.fromCharCode(((code - base + normalizedShift) % ALPHABET_SIZE) + base);
+        })
+        .join("");
+}
+
+export default vigenereCipher;

@@ -1,21 +1,25 @@
-// Shifts each letter by N positions in the
+export type CaesarMode = "encrypt" | "decrypt";
 
-// alphabet.
+const ALPHABET_SIZE = 26;
 
-// Shift amount (integer)
-export  function caesarCipher(text: string, shift: number) {
-  let result = "";
-  for (let i = 0; i < text.length; i++) {
-    let char = text[i];
-    if (char.match(/[a-z]/i)) {
-      const code = text.charCodeAt(i);
-      if (code >= 65 && code <= 90) {
-        char = String.fromCharCode(((code - 65 + shift) % 26) + 65);
-      } else {
-        char = String.fromCharCode(((code - 97 + shift) % 26) + 97);
-      }
-    }
-    result += char;
+function shiftChar(char: string, shift: number): string {
+  const code = char.charCodeAt(0);
+  const isUpper = code >= 65 && code <= 90;
+  const isLower = code >= 97 && code <= 122;
+
+  if (!isUpper && !isLower) {
+    return char;
   }
-  return result;
+
+  const base = isUpper ? 65 : 97;
+  const normalizedShift = ((shift % ALPHABET_SIZE) + ALPHABET_SIZE) % ALPHABET_SIZE;
+  const nextCode = ((code - base + normalizedShift) % ALPHABET_SIZE) + base;
+  return String.fromCharCode(nextCode);
 }
+
+export function caesarCipher(text: string, shift: number, mode: CaesarMode = "encrypt"): string {
+  const direction = mode === "encrypt" ? shift : -shift;
+  return [...text].map((char) => shiftChar(char, direction)).join("");
+}
+
+export default caesarCipher;
