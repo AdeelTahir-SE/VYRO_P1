@@ -322,41 +322,153 @@ function identifyTerminalNodes(nodes: PipelineNode[], edges: PipelineEdge[]): Se
   return terminals;
 }
 
-function CipherNode({ data, selected }: NodeProps) {
+interface CipherNodeProps extends NodeProps {
+  editingNodeId?: string;
+  onStartEditing?: (nodeId: string) => void;
+  onSaveEdit?: (nodeId: string, params: NodeParams) => void;
+  onCancelEdit?: () => void;
+}
+
+function CipherNode({
+  data,
+  selected,
+  id,
+  editingNodeId,
+  onStartEditing,
+  onSaveEdit,
+  onCancelEdit,
+}: CipherNodeProps) {
   const nodeData = data as CipherNodeData;
+  const isEditing = editingNodeId === id;
+  const [editParams, setEditParams] = useState<NodeParams>(nodeData.params);
+
+  useEffect(() => {
+    if (!isEditing) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        onSaveEdit?.(id, editParams);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        onCancelEdit?.();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isEditing, id, editParams, onSaveEdit, onCancelEdit]);
 
   return (
     <div
-      className={`rounded-2xl border-2 px-4 py-3 shadow-lg transition ${
-        selected 
-          ? "border-amber-600 bg-amber-50 shadow-[0_0_0_2px_rgba(217,119,6,0.4)]" 
-          : "border-gray-300 bg-white"
-      }`}
-      style={{ minWidth: 210 }}
+      className={`rounded-2xl border-2 px-4 py-3 shadow-lg transition ${isEditing ? "border-blue-500 bg-blue-50 shadow-[0_0_0_2px_rgba(59,130,246,0.4)]" : selected ? "border-amber-600 bg-amber-50 shadow-[0_0_0_2px_rgba(217,119,6,0.4)]" : "border-gray-300 bg-white"}`}
+      style={{ minWidth: 250 }}
+      onDoubleClick={() => onStartEditing?.(id)}
+      role="button"
+      title="Double-click to edit parameters"
     >
       <Handle type="target" position={Position.Left} className="h-3! w-3! border-none! bg-amber-500!" />
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.28em] text-gray-500">{algorithmLabels[nodeData.algorithm]}</p>
-          <p className="mt-1 text-sm font-medium text-gray-900">{nodeData.mode === "encrypt" ? "Encrypt" : "Decrypt"}</p>
-        </div>
-        <div className="flex flex-col items-end gap-1">
-          <span className="rounded-full border border-gray-300 bg-amber-100 px-2 py-1 text-[10px] text-amber-700 font-semibold">Pipeline</span>
-          {nodeData.pipelineNumber !== undefined && (
-            <span className="rounded-full border border-amber-400 bg-amber-200 px-2 py-0.5 text-[9px] text-amber-900 font-bold">
-              #{nodeData.pipelineNumber + 1}
-            </span>
+      {isEditing ? (
+        <div className="space-y-2" onClick={(e) => e.stopPropagation()}>
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.25em] text-gray-600 font-medium">Algorithm</p>
+            <p className="mt-1 text-xs font-semibold text-gray-900">{algorithmLabels[nodeData.algorithm]}</p>
+          </div>
+          {nodeData.algorithm === "caesar" && (
+            <label className="block space-y-1">
+              <p className="text-[10px] uppercase tracking-[0.25em] text-gray-600 font-medium">Shift</p>
+              <input
+                type="number"
+                value={editParams.shift}
+                onChange={(e) => setEditParams({ ...editParams, shift: Number(e.target.value) || 0 })}
+                className="w-full rounded border border-blue-300 bg-white px-2 py-1 text-xs text-gray-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                autoFocus
+              />
+            </label>
           )}
+          {(nodeData.algorithm === "vigenere" || nodeData.algorithm === "columnar" || nodeData.algorithm === "xor") && (
+            <label className="block space-y-1">
+              <p className="text-[10px] uppercase tracking-[0.25em] text-gray-600 font-medium">Key</p>
+              <input
+                type="text"
+                value={editParams.key}
+                onChange={(e) => setEditParams({ ...editParams, key: e.target.value })}
+                className="w-full rounded border border-blue-300 bg-white px-2 py-1 text-xs text-gray-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                autoFocus
+              />
+            </label>
+          )}
+          {nodeData.algorithm === "railFence" && (
+            <label className="block space-y-1">
+              <p className="text-[10px] uppercase tracking-[0.25em] text-gray-600 font-medium">Rails</p>
+              <input
+                type="number"
+                min={2}
+                value={editParams.rails}
+                onChange={(e) => setEditParams({ ...editParams, rails: Number(e.target.value) || 2 })}
+                className="w-full rounded border border-blue-300 bg-white px-2 py-1 text-xs text-gray-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                autoFocus
+              />
+            </label>
+          )}
+          {nodeData.algorithm === "substitution" && (
+            <label className="block space-y-1">
+              <p className="text-[10px] uppercase tracking-[0.25em] text-gray-600 font-medium">Alphabet</p>
+              <input
+                type="text"
+                maxLength={26}
+                value={editParams.alphabet}
+                onChange={(e) => setEditParams({ ...editParams, alphabet: e.target.value.toUpperCase() })}
+                className="w-full rounded border border-blue-300 bg-white px-2 py-1 text-xs text-gray-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                autoFocus
+              />
+            </label>
+          )}
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => onSaveEdit?.(id, editParams)}
+              className="flex-1 rounded border border-green-300 bg-green-50 px-2 py-1 text-[10px] font-semibold text-green-700 transition hover:bg-green-100"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              onClick={() => onCancelEdit?.()}
+              className="flex-1 rounded border border-gray-300 bg-gray-50 px-2 py-1 text-[10px] font-semibold text-gray-700 transition hover:bg-gray-100"
+            >
+              Cancel
+            </button>
+          </div>
+          <p className="text-[9px] text-gray-500 pt-1">Enter to save, Esc to cancel</p>
         </div>
-      </div>
-      <p className="mt-3 text-xs leading-5 text-gray-600">{nodeData.summary}</p>
-      {nodeData.result && (
-        <div className="mt-3 rounded bg-amber-50 border border-amber-200 p-2">
-          <p className="text-[10px] font-semibold text-amber-900">
-            {nodeData.isTerminal ? "Final result" : "Intermediate result"}:
-          </p>
-          <p className="text-xs text-amber-900 font-mono mt-1 wrap-break-word">{nodeData.result.substring(0, 40)}{nodeData.result.length > 40 ? "..." : ""}</p>
-        </div>
+      ) : (
+        <>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.28em] text-gray-500">{algorithmLabels[nodeData.algorithm]}</p>
+              <p className="mt-1 text-sm font-medium text-gray-900">{nodeData.mode === "encrypt" ? "Encrypt" : "Decrypt"}</p>
+            </div>
+            <div className="flex flex-col items-end gap-1">
+              <span className="rounded-full border border-gray-300 bg-amber-100 px-2 py-1 text-[10px] text-amber-700 font-semibold">Pipeline</span>
+              {nodeData.pipelineNumber !== undefined && (
+                <span className="rounded-full border border-amber-400 bg-amber-200 px-2 py-0.5 text-[9px] text-amber-900 font-bold">
+                  #{nodeData.pipelineNumber + 1}
+                </span>
+              )}
+            </div>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-gray-600">{nodeData.summary}</p>
+          <p className="mt-2 text-[9px] text-gray-400 italic">Double-click to edit</p>
+          {nodeData.result && (
+            <div className="mt-3 rounded bg-amber-50 border border-amber-200 p-2">
+              <p className="text-[10px] font-semibold text-amber-900">
+                {nodeData.isTerminal ? "Final result" : "Intermediate result"}:
+              </p>
+              <p className="text-xs text-amber-900 font-mono mt-1 wrap-break-word">{nodeData.result.substring(0, 40)}{nodeData.result.length > 40 ? "..." : ""}</p>
+            </div>
+          )}
+        </>
       )}
       <Handle type="source" position={Position.Right} className="h-3! w-3! border-none! bg-amber-500!" />
     </div>
@@ -392,11 +504,10 @@ function GraphEditor() {
   const [isRunning, setIsRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<"idle" | "success" | "error">("idle");
   const [globalMode, setGlobalMode] = useState<"forward" | "reverse">("forward");
+  const [editingNodeId, setEditingNodeId] = useState<string | undefined>(undefined);
   const { screenToFlowPosition } = useReactFlow();
 
   const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
-
-  const nodeTypes = useMemo(() => ({ cipher: CipherNode }), []);
 
   const updateNode = useCallback(
     (nodeId: string, updater: (node: PipelineNode) => PipelineNode) => {
@@ -417,6 +528,45 @@ function GraphEditor() {
       }));
     },
     [edges],
+  );
+
+  const handleStartEditing = useCallback((nodeId: string) => {
+    setEditingNodeId(nodeId);
+    setSelectedNodeId(nodeId);
+  }, []);
+
+  const handleSaveEdit = useCallback(
+    (nodeId: string, newParams: NodeParams) => {
+      updateNode(nodeId, (node) => {
+        const newData = {
+          ...node.data,
+          params: newParams,
+          summary: buildSummary(node.data.algorithm, node.data.mode, newParams),
+        };
+        return { ...node, data: newData };
+      });
+      setEditingNodeId(undefined);
+    },
+    [updateNode]
+  );
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingNodeId(undefined);
+  }, []);
+
+  const nodeTypes = useMemo(
+    () => ({
+      cipher: (props: NodeProps) => (
+        <CipherNode
+          {...props}
+          editingNodeId={editingNodeId}
+          onStartEditing={handleStartEditing}
+          onSaveEdit={handleSaveEdit}
+          onCancelEdit={handleCancelEdit}
+        />
+      ),
+    }),
+    [editingNodeId, handleStartEditing, handleSaveEdit, handleCancelEdit]
   );
 
   const addNodeToCanvas = useCallback(
