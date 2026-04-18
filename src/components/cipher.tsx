@@ -1,6 +1,27 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import "@xyflow/react/dist/style.css";
+import {
+  Background,
+  BackgroundVariant,
+  Connection,
+  ConnectionMode,
+  Controls,
+  Edge,
+  Handle,
+  MarkerType,
+  MiniMap,
+  Node,
+  NodeProps,
+  Panel,
+  Position,
+  ReactFlow,
+  ReactFlowProvider,
+  useEdgesState,
+  useNodesState,
+  useReactFlow,
+} from "@xyflow/react";
 import { caesarCipher } from "./cipher_algos/ceaser_cipher";
 import { columnarTransposition } from "./cipher_algos/columnar_transposition";
 import { railFence } from "./cipher_algos/rail_fence";
@@ -18,12 +39,15 @@ type NodeParams = {
   alphabet: string;
 };
 
-type PipelineNode = {
-  id: string;
+type CipherNodeData = {
   algorithm: AlgorithmId;
   mode: NodeMode;
   params: NodeParams;
+  summary: string;
 };
+
+type PipelineNode = Node<CipherNodeData>;
+type PipelineEdge = Edge;
 
 type NodeResult = {
   id: string;
@@ -48,29 +72,21 @@ const algorithmLabels: Record<AlgorithmId, string> = {
   xor: "XOR",
 };
 
-const algorithmOptions: { id: AlgorithmId; description: string }[] = [
-  { id: "caesar", description: "Shift letters by a fixed amount" },
-  { id: "vigenere", description: "Repeat a keyword across the text" },
-  { id: "substitution", description: "Map A-Z through a custom alphabet" },
-  { id: "railFence", description: "Write text in a zigzag fence" },
-  { id: "columnar", description: "Reorder columns by keyword" },
-  { id: "xor", description: "XOR bytes with a repeating key" },
-];
+const algorithmDescriptions: Record<AlgorithmId, string> = {
+  caesar: "Shift letters by a fixed amount",
+  vigenere: "Repeat a keyword across the text",
+  substitution: "Map A-Z through a custom alphabet",
+  railFence: "Write text in a zigzag fence",
+  columnar: "Reorder columns by keyword",
+  xor: "XOR bytes with a repeating key",
+};
 
 const defaultAlphabet = "QWERTYUIOPASDFGHJKLZXCVBNM";
 
-function createNode(algorithm: AlgorithmId = "caesar"): PipelineNode {
-  return {
-    id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
-    algorithm,
-    mode: "encrypt",
-    params: {
-      shift: 3,
-      key: algorithm === "substitution" ? defaultAlphabet : "KEY",
-      rails: 3,
-      alphabet: defaultAlphabet,
-    },
-  };
+const algorithmOptions: AlgorithmId[] = ["caesar", "vigenere", "substitution", "railFence", "columnar", "xor"];
+
+function createId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
 function createDefaultsFor(algorithm: AlgorithmId): NodeParams {
@@ -82,45 +98,156 @@ function createDefaultsFor(algorithm: AlgorithmId): NodeParams {
   };
 }
 
-function runNode(node: PipelineNode, input: string): string {
-  switch (node.algorithm) {
+function buildSummary(algorithm: AlgorithmId, mode: NodeMode, params: NodeParams): string {
+  const direction = mode === "encrypt" ? "Encrypt" : "Decrypt";
+
+  switch (algorithm) {
     case "caesar":
-      return caesarCipher(input, node.params.shift, node.mode);
+      return `${direction} with shift ${params.shift}`;
     case "vigenere":
-      return vigenereCipher(input, node.params.key, node.mode);
+      return `${direction} with key ${params.key || "KEY"}`;
     case "substitution":
-      return substitutionCipher(input, node.params.alphabet, node.mode);
+      return `${direction} with custom alphabet`;
     case "railFence":
-      return railFence(input, node.params.rails, node.mode);
+      return `${direction} with ${params.rails} rails`;
     case "columnar":
-      return columnarTransposition(input, node.params.key, node.mode);
+      return `${direction} with keyword ${params.key || "KEY"}`;
     case "xor":
-      return xorCipher(input, node.params.key, node.mode);
+      return `${direction} with key ${params.key || "KEY"}`;
+    default:
+      return direction;
+  }
+}
+
+function createNode(algorithm: AlgorithmId, position: { x: number; y: number }): PipelineNode {
+  const params = createDefaultsFor(algorithm);
+
+  return {
+    id: createId(),
+    type: "cipher",
+    position,
+    data: {
+      algorithm,
+      mode: "encrypt",
+      params,
+      summary: buildSummary(algorithm, "encrypt", params),
+    },
+  };
+}
+
+function runNode(node: PipelineNode, input: string): string {
+  const { algorithm, mode, params } = node.data;
+
+  switch (algorithm) {
+    case "caesar":
+      return caesarCipher(input, params.shift, mode);
+    case "vigenere":
+      return vigenereCipher(input, params.key, mode);
+    case "substitution":
+      return substitutionCipher(input, params.alphabet, mode);
+    case "railFence":
+      return railFence(input, params.rails, mode);
+    case "columnar":
+      return columnarTransposition(input, params.key, mode);
+    case "xor":
+      return xorCipher(input, params.key, mode);
     default:
       return input;
   }
 }
 
-function evaluatePipeline(source: string, nodes: PipelineNode[]): PipelineRun {
-  let current = source;
+function evaluatePipeline(source: string, nodes: PipelineNode[], edges: PipelineEdge[]): PipelineRun {
+  if (nodes.length === 0) {
+    return { source, finalOutput: source, nodes: [] };
+  }
 
-  const results = nodes.map((node) => {
-    const output = runNode(node, current);
-    const result: NodeResult = {
-      id: node.id,
-      algorithm: node.algorithm,
-      mode: node.mode,
-      input: current,
-      output,
-    };
-    current = output;
-    return result;
+  const nodeMap = new Map(nodes.map((node) => [node.id, node] as const));
+  const outgoing = new Map<string, string[]>();
+  const incoming = new Map<string, string>();
+  const indegree = new Map<string, number>(nodes.map((node) => [node.id, 0]));
+
+  edges.forEach((edge) => {
+    const currentOutgoing = outgoing.get(edge.source) ?? [];
+    currentOutgoing.push(edge.target);
+    outgoing.set(edge.source, currentOutgoing);
+    incoming.set(edge.target, edge.source);
+    indegree.set(edge.target, (indegree.get(edge.target) ?? 0) + 1);
   });
+
+  const results = new Map<string, NodeResult>();
+  const inputByNode = new Map<string, string>();
+  const queue: string[] = [];
+  const enqueued = new Set<string>();
+
+  nodes.forEach((node) => {
+    if ((indegree.get(node.id) ?? 0) === 0) {
+      inputByNode.set(node.id, source);
+      queue.push(node.id);
+      enqueued.add(node.id);
+    }
+  });
+
+  while (queue.length > 0) {
+    const nodeId = queue.shift() ?? "";
+    enqueued.delete(nodeId);
+    const node = nodeMap.get(nodeId);
+
+    if (!node || results.has(nodeId)) {
+      continue;
+    }
+
+    const input = inputByNode.get(nodeId) ?? source;
+    const output = runNode(node, input);
+    results.set(nodeId, {
+      id: node.id,
+      algorithm: node.data.algorithm,
+      mode: node.data.mode,
+      input,
+      output,
+    });
+
+    const nextNodes = outgoing.get(nodeId) ?? [];
+    nextNodes.forEach((targetId) => {
+      if (!inputByNode.has(targetId)) {
+        inputByNode.set(targetId, output);
+      }
+
+      const nextIndegree = (indegree.get(targetId) ?? 0) - 1;
+      indegree.set(targetId, nextIndegree);
+
+      if (nextIndegree <= 0 && !enqueued.has(targetId)) {
+        queue.push(targetId);
+        enqueued.add(targetId);
+      }
+    });
+  }
+
+  nodes.forEach((node) => {
+    if (results.has(node.id)) {
+      return;
+    }
+
+    const upstreamId = incoming.get(node.id);
+    const fallbackInput = upstreamId ? results.get(upstreamId)?.output ?? source : source;
+    const output = runNode(node, fallbackInput);
+
+    results.set(node.id, {
+      id: node.id,
+      algorithm: node.data.algorithm,
+      mode: node.data.mode,
+      input: fallbackInput,
+      output,
+    });
+  });
+
+  const terminalNodes = nodes.filter((node) => !(outgoing.get(node.id)?.length ?? 0));
+  const finalNode = terminalNodes.length > 0 ? terminalNodes[terminalNodes.length - 1] : nodes[nodes.length - 1];
+  const finalOutput = finalNode ? results.get(finalNode.id)?.output ?? source : source;
 
   return {
     source,
-    finalOutput: current,
-    nodes: results,
+    finalOutput,
+    nodes: nodes.map((node) => results.get(node.id)).filter((value): value is NodeResult => Boolean(value)),
   };
 }
 
@@ -128,378 +255,523 @@ function formatOutput(value: string): string {
   return value.length ? value : "[empty output]";
 }
 
-export default function Pipeline() {
+function getNodeColor(algorithm: AlgorithmId): string {
+  switch (algorithm) {
+    case "caesar":
+      return "#f59e0b";
+    case "vigenere":
+      return "#10b981";
+    case "substitution":
+      return "#8b5cf6";
+    case "railFence":
+      return "#38bdf8";
+    case "columnar":
+      return "#f97316";
+    case "xor":
+      return "#ef4444";
+    default:
+      return "#f59e0b";
+  }
+}
+
+function CipherNode({ data, selected }: NodeProps) {
+  const nodeData = data as CipherNodeData;
+
+  return (
+    <div
+      className={`rounded-2xl border-2 px-4 py-3 shadow-lg transition ${
+        selected 
+          ? "border-amber-600 bg-amber-50 shadow-[0_0_0_2px_rgba(217,119,6,0.4)]" 
+          : "border-gray-300 bg-white"
+      }`}
+      style={{ minWidth: 210 }}
+    >
+      <Handle type="target" position={Position.Left} className="h-3! w-3! border-none! bg-amber-500!" />
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.28em] text-gray-500">{algorithmLabels[nodeData.algorithm]}</p>
+          <p className="mt-1 text-sm font-medium text-gray-900">{nodeData.mode === "encrypt" ? "Encrypt" : "Decrypt"}</p>
+        </div>
+        <span className="rounded-full border border-gray-300 bg-amber-100 px-2 py-1 text-[10px] text-amber-700 font-semibold">Pipeline</span>
+      </div>
+      <p className="mt-3 text-xs leading-5 text-gray-600">{nodeData.summary}</p>
+      <Handle type="source" position={Position.Right} className="h-3! w-3! border-none! bg-amber-500!" />
+    </div>
+  );
+}
+
+function GraphEditor() {
+  const [starterGraph] = useState(() => {
+    const first = createNode("caesar", { x: 120, y: 120 });
+    const second = createNode("vigenere", { x: 420, y: 120 });
+
+    return {
+      nodes: [first, second],
+      edges: [
+        {
+          id: `edge-${first.id}-${second.id}`,
+          source: first.id,
+          target: second.id,
+          type: "smoothstep",
+          animated: true,
+          style: { stroke: "#d97706", strokeWidth: 2 },
+          markerEnd: { type: MarkerType.ArrowClosed, color: "#d97706" },
+        },
+      ] satisfies PipelineEdge[],
+    };
+  });
+
+  const [nodes, setNodes, onNodesChange] = useNodesState<PipelineNode>(starterGraph.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<PipelineEdge>(starterGraph.edges);
   const [source, setSource] = useState("HELLO WORLD");
-  const [nodes, setNodes] = useState<PipelineNode[]>([]);
-  const liveRun = useMemo(() => evaluatePipeline(source, nodes), [source, nodes]);
-  const [lastRun, setLastRun] = useState<PipelineRun>(liveRun);
+  const [selectedNodeId, setSelectedNodeId] = useState<string>(starterGraph.nodes[0]?.id ?? "");
+  const [lastRun, setLastRun] = useState<PipelineRun>(() => evaluatePipeline(source, starterGraph.nodes, starterGraph.edges));
+  const [isRunning, setIsRunning] = useState(false);
+  const [runStatus, setRunStatus] = useState<"idle" | "success" | "error">("idle");
+  const { screenToFlowPosition } = useReactFlow();
 
-  const addNode = (algorithm: AlgorithmId = "caesar") => {
-    setNodes((current) => [...current, createNode(algorithm)]);
-  };
+  const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
 
-  const insertNodeAt = (index: number, algorithm: AlgorithmId = "caesar") => {
-    setNodes((current) => {
-      const next = [...current];
-      next.splice(index, 0, createNode(algorithm));
-      return next;
-    });
-  };
+  const nodeTypes = useMemo(() => ({ cipher: CipherNode }), []);
 
-  const updateNode = (nodeId: string, updater: (node: PipelineNode) => PipelineNode) => {
-    setNodes((current) => current.map((node) => (node.id === nodeId ? updater(node) : node)));
-  };
+  const updateNode = useCallback(
+    (nodeId: string, updater: (node: PipelineNode) => PipelineNode) => {
+      setNodes((current: PipelineNode[]) => current.map((node: PipelineNode) => (node.id === nodeId ? updater(node) : node)));
+    },
+    [setNodes],
+  );
 
-  const deleteNode = (nodeId: string) => {
-    setNodes((current) => current.filter((node) => node.id !== nodeId));
-  };
+  const addNodeToCanvas = useCallback(
+    (algorithm: AlgorithmId, position?: { x: number; y: number }) => {
+      const lastNode = nodes[nodes.length - 1];
+      const fallbackPosition = lastNode ? { x: lastNode.position.x + 260, y: lastNode.position.y } : { x: 120, y: 120 };
+      const node = createNode(algorithm, position ?? fallbackPosition);
+      setNodes((current: PipelineNode[]) => [...current, node]);
+      setSelectedNodeId(node.id);
+    },
+    [nodes, setNodes],
+  );
 
-  const moveNode = (nodeId: string, direction: -1 | 1) => {
-    setNodes((current) => {
-      const index = current.findIndex((node) => node.id === nodeId);
-      const nextIndex = index + direction;
+  const deleteNode = useCallback(
+    (nodeId: string) => {
+      setNodes((current: PipelineNode[]) => current.filter((node: PipelineNode) => node.id !== nodeId));
+      setEdges((current: PipelineEdge[]) => current.filter((edge: PipelineEdge) => edge.source !== nodeId && edge.target !== nodeId));
+      setSelectedNodeId((current) => (current === nodeId ? "" : current));
+    },
+    [setEdges, setNodes],
+  );
 
-      if (index < 0 || nextIndex < 0 || nextIndex >= current.length) {
-        return current;
+  const updateSelectedNode = useCallback(
+    (updater: (node: PipelineNode) => PipelineNode) => {
+      if (!selectedNodeId) {
+        return;
       }
 
-      const next = [...current];
-      const [moved] = next.splice(index, 1);
-      next.splice(nextIndex, 0, moved);
-      return next;
-    });
-  };
+      updateNode(selectedNodeId, updater);
+    },
+    [selectedNodeId, updateNode],
+  );
 
-  const runPipeline = () => {
-    setLastRun(evaluatePipeline(source, nodes));
-  };
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      if (!connection.source || !connection.target) {
+        return;
+      }
+
+      const connectionEdge: Omit<PipelineEdge, "id"> = {
+        source: connection.source,
+        target: connection.target,
+        type: "smoothstep",
+        animated: true,
+        style: { stroke: "#d97706", strokeWidth: 2 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: "#d97706" },
+      };
+
+      setEdges((current: PipelineEdge[]) => {
+        // For linear chain: prevent multiple inputs to a node
+        const filtered = current.filter((edge: PipelineEdge) => edge.target !== connection.target);
+        // Also prevent multiple outputs from source node
+        const linearFiltered = filtered.filter((edge: PipelineEdge) => edge.source !== connection.source);
+        return [...linearFiltered, { id: createId(), ...connectionEdge }];
+      });
+    },
+    [setEdges],
+  );
+
+  const onDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const algorithm = event.dataTransfer.getData("application/x-cipher-node") as AlgorithmId;
+
+      if (!algorithmOptions.includes(algorithm)) {
+        return;
+      }
+
+      const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      addNodeToCanvas(algorithm, position);
+    },
+    [addNodeToCanvas, screenToFlowPosition],
+  );
+
+  const onDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  }, []);
+
+  const runPipeline = useCallback(async () => {
+    if (isRunning) return;
+    setIsRunning(true);
+    setRunStatus("idle");
+    
+    try {
+      // Simulate async operation with minimal delay for feedback
+      await new Promise(resolve => setTimeout(resolve, 300));
+      setLastRun(evaluatePipeline(source, nodes, edges));
+      setRunStatus("success");
+      
+      // Clear success status after 2 seconds
+      setTimeout(() => setRunStatus("idle"), 2000);
+    } catch {
+      setRunStatus("error");
+      setTimeout(() => setRunStatus("idle"), 2000);
+    } finally {
+      setIsRunning(false);
+    }
+  }, [edges, nodes, source, isRunning]);
+
+  const onNodeDragStop = useCallback(
+    (_: React.MouseEvent, node: PipelineNode) => {
+      updateNode(node.id, (current) => ({ ...current, position: node.position }));
+    },
+    [updateNode],
+  );
 
   return (
     <section
-      className="min-h-screen px-4 py-8 text-slate-100 sm:px-6 lg:px-10"
-      style={{
-        background:
-          "radial-gradient(circle at top, rgba(244, 180, 0, 0.18), transparent 35%), linear-gradient(180deg, #0f172a 0%, #111827 55%, #050816 100%)",
-      }}
+      className="min-h-screen px-4 py-6 text-gray-900 sm:px-6 lg:px-8 bg-white"
     >
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
-        <header className="rounded-3xl border border-white/10 bg-white/5 p-6 shadow-2xl shadow-black/20 backdrop-blur-xl">
-          <p className="text-xs uppercase tracking-[0.35em] text-amber-300/80">Cipher pipeline editor</p>
-          <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div className="max-w-3xl space-y-3">
-              <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Build a modifiable chain of cipher nodes</h1>
-              <p className="text-sm leading-6 text-slate-300 sm:text-base">
-                Add, insert, delete, reorder, and retune algorithms. The pipeline shows live step-by-step output and a separate last-run result panel.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-3 text-sm">
+      <div className="mx-auto grid min-h-[calc(100vh-3rem)] w-full gap-4 xl:grid-cols-[300px_minmax(0,1fr)]" style={{ maxWidth: 1600 }}>
+        <aside className="flex flex-col gap-4 rounded-3xl border border-gray-300 bg-gray-50 p-4 shadow-lg">
+          <div>
+            <p className="text-xs uppercase tracking-[0.35em] text-amber-700 font-semibold">Cipher pipeline</p>
+            <p className="mt-2 text-sm leading-6 text-gray-600">Drag algorithms onto the canvas, connect them in a linear chain, then edit the selected node here.</p>
+          </div>
+
+          <div className="space-y-2 rounded-2xl border border-gray-300 bg-white p-3 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-gray-600 font-medium">Source text</p>
+                <p className="text-sm text-gray-700">Input for the pipeline</p>
+              </div>
               <button
                 type="button"
                 onClick={runPipeline}
-                className="rounded-full bg-amber-400 px-5 py-2.5 font-medium text-slate-950 transition hover:bg-amber-300"
+                disabled={isRunning}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                  isRunning
+                    ? "bg-amber-300 text-gray-700 cursor-not-allowed"
+                    : runStatus === "success"
+                      ? "bg-green-500 text-white"
+                      : runStatus === "error"
+                        ? "bg-red-500 text-white"
+                        : "bg-amber-500 text-white hover:bg-amber-600"
+                }`}
               >
-                Run pipeline
-              </button>
-              <button
-                type="button"
-                onClick={() => setNodes([createNode("caesar")])}
-                className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 font-medium text-slate-100 transition hover:bg-white/10"
-              >
-                Reset nodes
-              </button>
-              <button
-                type="button"
-                onClick={() => setSource("")}
-                className="rounded-full border border-white/15 bg-white/5 px-5 py-2.5 font-medium text-slate-100 transition hover:bg-white/10"
-              >
-                Clear input
+                {isRunning ? "Running..." : runStatus === "success" ? "✓ Done" : runStatus === "error" ? "✗ Error" : "Run"}
               </button>
             </div>
+            <textarea
+              value={source}
+              onChange={(event) => setSource(event.target.value)}
+              rows={4}
+              className="w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+              placeholder="Type the text to process"
+            />
           </div>
-        </header>
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.3fr)_minmax(320px,0.7fr)]">
-          <div className="space-y-6">
-            <section className="rounded-3xl border border-white/10 bg-slate-950/60 p-5 shadow-xl shadow-black/10 backdrop-blur-xl">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold">Source input</h2>
-                  <p className="text-sm text-slate-400">This text is fed into the first node and transformed through the chain.</p>
+          <div className="rounded-2xl border-2 border-amber-500 bg-amber-50 p-3 shadow-sm">
+            <div className="mb-3">
+              <p className="text-xs uppercase tracking-[0.3em] text-amber-900 font-semibold">Pipeline Output</p>
+              <p className="text-sm text-amber-800 font-mono mt-2 p-2 bg-white rounded border border-amber-200 wrap-break-word">{formatOutput(lastRun.finalOutput)}</p>
+            </div>
+            {lastRun.nodes.length > 0 && (
+              <div className="border-t border-amber-200 pt-3">
+                <p className="text-xs uppercase tracking-[0.3em] text-amber-900 font-semibold mb-2">Intermediate Results</p>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {lastRun.nodes.map((result, idx) => (
+                    <div key={result.id} className="rounded border border-amber-200 bg-white p-2">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">{idx + 1}</span>
+                        <span className="text-xs font-medium text-gray-700">{algorithmLabels[result.algorithm]} ({result.mode})</span>
+                      </div>
+                      <div className="text-xs text-gray-600 space-y-1">
+                        <div><span className="font-semibold">In:</span> <span className="text-gray-800 font-mono">{result.input.substring(0, 30)}{result.input.length > 30 ? "..." : ""}</span></div>
+                        <div><span className="font-semibold">Out:</span> <span className="text-gray-800 font-mono">{result.output.substring(0, 30)}{result.output.length > 30 ? "..." : ""}</span></div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2 rounded-2xl border border-gray-300 bg-white p-3 shadow-sm">
+            <p className="text-xs uppercase tracking-[0.3em] text-gray-600 font-medium">Algorithm library</p>
+            <div className="grid gap-2">
+              {algorithmOptions.map((algorithm) => (
+                <button
+                  key={algorithm}
+                  type="button"
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData("application/x-cipher-node", algorithm);
+                    event.dataTransfer.effectAllowed = "move";
+                  }}
+                  onClick={() => addNodeToCanvas(algorithm)}
+                  className="group flex items-center justify-between rounded-2xl border border-gray-300 bg-gray-100 px-3 py-2 text-left transition hover:border-amber-500 hover:bg-amber-50"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">{algorithmLabels[algorithm]}</p>
+                    <p className="text-xs text-gray-600">{algorithmDescriptions[algorithm]}</p>
+                  </div>
+                  <span className="rounded-full border border-gray-300 bg-white px-2 py-1 text-[10px] uppercase tracking-[0.3em] text-gray-500 font-medium">
+                    Drag
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-gray-300 bg-white p-3 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.3em] text-gray-600 font-medium">Selected node</p>
+                <p className="text-sm text-gray-900 font-semibold">{selectedNode ? algorithmLabels[selectedNode.data.algorithm] : "None"}</p>
+              </div>
+              {selectedNode ? (
                 <button
                   type="button"
-                  onClick={() => addNode()}
-                  className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-4 py-2 text-sm font-medium text-emerald-200 transition hover:bg-emerald-400/20"
+                  onClick={() => deleteNode(selectedNode.id)}
+                  className="rounded-full border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"
                 >
-                  Add node
+                  Delete
                 </button>
-              </div>
+              ) : null}
+            </div>
 
-              <textarea
-                value={source}
-                onChange={(event) => setSource(event.target.value)}
-                rows={5}
-                className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-900/80 px-4 py-3 text-sm text-slate-100 outline-none ring-0 placeholder:text-slate-500 focus:border-amber-300/50"
-                placeholder="Type the text to encrypt or decrypt"
-              />
+            {selectedNode ? (
+              <div className="mt-3 space-y-3">
+                <label className="block space-y-1 text-sm">
+                  <span className="text-gray-700 font-medium">Type</span>
+                  <select
+                    value={selectedNode.data.algorithm}
+                    onChange={(event) =>
+                      updateSelectedNode((current) => {
+                        const algorithm = event.target.value as AlgorithmId;
+                        const params = createDefaultsFor(algorithm);
+                        return {
+                          ...current,
+                          data: {
+                            ...current.data,
+                            algorithm,
+                            params,
+                            summary: buildSummary(algorithm, current.data.mode, params),
+                          },
+                        };
+                      })
+                    }
+                    className="w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                  >
+                    {algorithmOptions.map((algorithm) => (
+                      <option key={algorithm} value={algorithm}>
+                        {algorithmLabels[algorithm]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
-              <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Live final output</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-100" style={{ overflowWrap: "anywhere" }}>
-                    {formatOutput(liveRun.finalOutput)}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Last run output</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-100" style={{ overflowWrap: "anywhere" }}>
-                    {formatOutput(lastRun.finalOutput)}
-                  </p>
-                </div>
-              </div>
-            </section>
-
-            <section className="space-y-4">
-              <div className="flex items-center justify-between px-1">
-                <div>
-                  <h2 className="text-lg font-semibold">Pipeline nodes</h2>
-                  <p className="text-sm text-slate-400">Each node can be edited independently. Outputs are displayed after every step.</p>
-                </div>
-                <div className="text-sm text-slate-400">{nodes.length} node{nodes.length === 1 ? "" : "s"}</div>
-              </div>
-
-              <div className="space-y-4">
-                {nodes.length === 0 ? (
-                  <div className="rounded-3xl border border-dashed border-white/15 bg-white/5 p-8 text-center text-sm text-slate-400">
-                    No nodes yet. Add one to start building the pipeline.
+                <label className="block space-y-1 text-sm">
+                  <span className="text-gray-700 font-medium">Mode</span>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(["encrypt", "decrypt"] as NodeMode[]).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() =>
+                          updateSelectedNode((current) => ({
+                            ...current,
+                            data: {
+                              ...current.data,
+                              mode,
+                              summary: buildSummary(current.data.algorithm, mode, current.data.params),
+                            },
+                          }))
+                        }
+                        className={`rounded-2xl border px-3 py-2 text-sm transition ${
+                          selectedNode.data.mode === mode
+                            ? "border-amber-500 bg-amber-100 text-amber-900 font-medium"
+                            : "border-gray-300 bg-gray-100 text-gray-700 hover:border-amber-300"
+                        }`}
+                      >
+                        {mode === "encrypt" ? "Encrypt" : "Decrypt"}
+                      </button>
+                    ))}
                   </div>
+                </label>
+
+                {selectedNode.data.algorithm === "caesar" ? (
+                  <label className="block space-y-1 text-sm">
+                    <span className="text-gray-700 font-medium">Shift</span>
+                    <input
+                      type="number"
+                      value={selectedNode.data.params.shift}
+                      onChange={(event) =>
+                        updateSelectedNode((current) => {
+                          const params = { ...current.data.params, shift: Number(event.target.value) || 0 };
+                          return {
+                            ...current,
+                            data: {
+                              ...current.data,
+                              params,
+                              summary: buildSummary(current.data.algorithm, current.data.mode, params),
+                            },
+                          };
+                        })
+                      }
+                      className="w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                    />
+                  </label>
                 ) : null}
 
-                {nodes.map((node, index) => {
-                  const liveNodeResult = liveRun.nodes[index];
+                {selectedNode.data.algorithm === "vigenere" || selectedNode.data.algorithm === "columnar" || selectedNode.data.algorithm === "xor" ? (
+                  <label className="block space-y-1 text-sm">
+                    <span className="text-gray-700 font-medium">Key</span>
+                    <input
+                      type="text"
+                      value={selectedNode.data.params.key}
+                      onChange={(event) =>
+                        updateSelectedNode((current) => {
+                          const params = { ...current.data.params, key: event.target.value };
+                          return {
+                            ...current,
+                            data: {
+                              ...current.data,
+                              params,
+                              summary: buildSummary(current.data.algorithm, current.data.mode, params),
+                            },
+                          };
+                        })
+                      }
+                      className="w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                    />
+                  </label>
+                ) : null}
 
-                  return (
-                    <article key={node.id} className="rounded-3xl border border-white/10 bg-slate-950/70 p-5 shadow-xl shadow-black/10 backdrop-blur-xl">
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="flex-1 space-y-4">
-                          <div className="flex flex-wrap items-center gap-3">
-                            <span className="rounded-full bg-amber-400/15 px-3 py-1 text-xs font-semibold uppercase tracking-[0.3em] text-amber-200">
-                              Step {index + 1}
-                            </span>
-                            <select
-                              value={node.algorithm}
-                              onChange={(event) =>
-                                updateNode(node.id, (current) => ({
-                                  ...current,
-                                  algorithm: event.target.value as AlgorithmId,
-                                  params: createDefaultsFor(event.target.value as AlgorithmId),
-                                }))
-                              }
-                              className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-slate-100 outline-none"
-                            >
-                              {algorithmOptions.map((option) => (
-                                <option key={option.id} value={option.id} className="bg-slate-950 text-slate-100">
-                                  {algorithmLabels[option.id]}
-                                </option>
-                              ))}
-                            </select>
-                            <select
-                              value={node.mode}
-                              onChange={(event) =>
-                                updateNode(node.id, (current) => ({ ...current, mode: event.target.value as NodeMode }))
-                              }
-                              className="rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm text-slate-100 outline-none"
-                            >
-                              <option value="encrypt" className="bg-slate-950 text-slate-100">
-                                Encrypt
-                              </option>
-                              <option value="decrypt" className="bg-slate-950 text-slate-100">
-                                Decrypt
-                              </option>
-                            </select>
-                          </div>
+                {selectedNode.data.algorithm === "railFence" ? (
+                  <label className="block space-y-1 text-sm">
+                    <span className="text-gray-700 font-medium">Rails</span>
+                    <input
+                      type="number"
+                      min={2}
+                      value={selectedNode.data.params.rails}
+                      onChange={(event) =>
+                        updateSelectedNode((current) => {
+                          const params = { ...current.data.params, rails: Number(event.target.value) || 2 };
+                          return {
+                            ...current,
+                            data: {
+                              ...current.data,
+                              params,
+                              summary: buildSummary(current.data.algorithm, current.data.mode, params),
+                            },
+                          };
+                        })
+                      }
+                      className="w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                    />
+                  </label>
+                ) : null}
 
-                          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                            {node.algorithm === "caesar" ? (
-                              <label className="space-y-2 text-sm text-slate-300">
-                                <span>Shift</span>
-                                <input
-                                  type="number"
-                                  value={node.params.shift}
-                                  onChange={(event) =>
-                                    updateNode(node.id, (current) => ({
-                                      ...current,
-                                      params: { ...current.params, shift: Number(event.target.value) || 0 },
-                                    }))
-                                  }
-                                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-slate-100 outline-none"
-                                />
-                              </label>
-                            ) : null}
+                {selectedNode.data.algorithm === "substitution" ? (
+                  <label className="block space-y-1 text-sm">
+                    <span className="text-gray-700 font-medium">Alphabet</span>
+                    <input
+                      type="text"
+                      maxLength={26}
+                      value={selectedNode.data.params.alphabet}
+                      onChange={(event) =>
+                        updateSelectedNode((current) => {
+                          const params = { ...current.data.params, alphabet: event.target.value.toUpperCase() };
+                          return {
+                            ...current,
+                            data: {
+                              ...current.data,
+                              params,
+                              summary: buildSummary(current.data.algorithm, current.data.mode, params),
+                            },
+                          };
+                        })
+                      }
+                      className="w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                    />
+                  </label>
+                ) : null}
 
-                            {node.algorithm === "vigenere" || node.algorithm === "columnar" || node.algorithm === "xor" ? (
-                              <label className="space-y-2 text-sm text-slate-300">
-                                <span>{node.algorithm === "columnar" ? "Keyword" : "Key"}</span>
-                                <input
-                                  type="text"
-                                  value={node.params.key}
-                                  onChange={(event) =>
-                                    updateNode(node.id, (current) => ({
-                                      ...current,
-                                      params: { ...current.params, key: event.target.value },
-                                    }))
-                                  }
-                                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-slate-100 outline-none placeholder:text-slate-500"
-                                  placeholder={node.algorithm === "columnar" ? "keyword" : "key"}
-                                />
-                              </label>
-                            ) : null}
-
-                            {node.algorithm === "railFence" ? (
-                              <label className="space-y-2 text-sm text-slate-300">
-                                <span>Rails</span>
-                                <input
-                                  type="number"
-                                  min={2}
-                                  value={node.params.rails}
-                                  onChange={(event) =>
-                                    updateNode(node.id, (current) => ({
-                                      ...current,
-                                      params: { ...current.params, rails: Number(event.target.value) || 2 },
-                                    }))
-                                  }
-                                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-slate-100 outline-none"
-                                />
-                              </label>
-                            ) : null}
-
-                            {node.algorithm === "substitution" ? (
-                              <label className="space-y-2 text-sm text-slate-300 sm:col-span-2 lg:col-span-2">
-                                <span>Substitution alphabet</span>
-                                <input
-                                  type="text"
-                                  value={node.params.alphabet}
-                                  onChange={(event) =>
-                                    updateNode(node.id, (current) => ({
-                                      ...current,
-                                      params: { ...current.params, alphabet: event.target.value.toUpperCase() },
-                                    }))
-                                  }
-                                  maxLength={26}
-                                  className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm text-slate-100 outline-none placeholder:text-slate-500"
-                                  placeholder="26-letter alphabet mapping"
-                                />
-                              </label>
-                            ) : null}
-                          </div>
-
-                          <div className="grid gap-3 sm:grid-cols-2">
-                            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                              <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Input</p>
-                              <p className="mt-2 text-sm leading-6 text-slate-100" style={{ overflowWrap: "anywhere" }}>
-                                {formatOutput(liveNodeResult?.input ?? source)}
-                              </p>
-                            </div>
-                            <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4">
-                              <p className="text-xs uppercase tracking-[0.3em] text-emerald-200">Output</p>
-                              <p className="mt-2 text-sm leading-6 text-emerald-50" style={{ overflowWrap: "anywhere" }}>
-                                {formatOutput(liveNodeResult?.output ?? source)}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-wrap gap-2 lg:w-48 lg:justify-end">
-                          <button
-                            type="button"
-                            onClick={() => insertNodeAt(index, "caesar")}
-                            className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-slate-100 transition hover:bg-white/10"
-                          >
-                            Insert above
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => insertNodeAt(index + 1, "caesar")}
-                            className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-slate-100 transition hover:bg-white/10"
-                          >
-                            Insert below
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => moveNode(node.id, -1)}
-                            className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-slate-100 transition hover:bg-white/10"
-                          >
-                            Move up
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => moveNode(node.id, 1)}
-                            className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-slate-100 transition hover:bg-white/10"
-                          >
-                            Move down
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => deleteNode(node.id)}
-                            className="rounded-full border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-200 transition hover:bg-rose-400/20"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    </article>
-                  );
-                })}
+                <div className="rounded-2xl border border-gray-300 bg-gray-100 p-3">
+                  <p className="text-xs uppercase tracking-[0.3em] text-gray-600 font-medium">Summary</p>
+                  <p className="mt-2 text-sm text-gray-900">{selectedNode.data.summary}</p>
+                </div>
               </div>
-            </section>
+            ) : null}
           </div>
+        </aside>
 
-          <aside className="space-y-6 xl:sticky xl:top-6 xl:self-start">
-            <section className="rounded-3xl border border-white/10 bg-slate-950/70 p-5 shadow-xl shadow-black/10 backdrop-blur-xl">
-              <h2 className="text-lg font-semibold">Last run snapshot</h2>
-              <p className="mt-1 text-sm text-slate-400">This panel updates only when you press Run pipeline.</p>
-
-              <div className="mt-4 space-y-4">
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Source</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-100" style={{ overflowWrap: "anywhere" }}>
-                    {formatOutput(lastRun.source)}
-                  </p>
-                </div>
-                <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4">
-                  <p className="text-xs uppercase tracking-[0.3em] text-amber-200">Final output</p>
-                  <p className="mt-2 text-sm leading-6 text-amber-50" style={{ overflowWrap: "anywhere" }}>
-                    {formatOutput(lastRun.finalOutput)}
-                  </p>
-                </div>
-              </div>
-            </section>
-
-            <section className="rounded-3xl border border-white/10 bg-slate-950/70 p-5 shadow-xl shadow-black/10 backdrop-blur-xl">
-              <h2 className="text-lg font-semibold">Available nodes</h2>
-              <div className="mt-4 space-y-3">
-                {algorithmOptions.map((option) => (
-                  <div key={option.id} className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="font-medium text-slate-100">{algorithmLabels[option.id]}</p>
-                        <p className="text-sm text-slate-400">{option.description}</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => addNode(option.id)}
-                        className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-slate-100 transition hover:bg-white/10"
-                      >
-                        Add
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </aside>
-        </div>
+        <main className="relative min-h-[70vh] overflow-hidden rounded-3xl border border-gray-300 bg-gray-50 shadow-lg">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            onNodeClick={(_: React.MouseEvent, node: PipelineNode) => setSelectedNodeId(node.id)}
+            onPaneClick={() => setSelectedNodeId("")}
+            onNodeDragStop={onNodeDragStop}
+            nodeTypes={nodeTypes}
+            connectionMode={ConnectionMode.Loose}
+            fitView
+            snapToGrid
+            snapGrid={[24, 24]}
+            defaultEdgeOptions={{
+              type: "smoothstep",
+              animated: true,
+              style: { stroke: "#d97706", strokeWidth: 2 },
+              markerEnd: { type: MarkerType.ArrowClosed, color: "#d97706" },
+            }}
+          >
+            <Panel position="top-left" className="pointer-events-none rounded-full border border-gray-400 bg-white px-4 py-2 text-xs uppercase tracking-[0.3em] text-gray-700 font-medium shadow-sm">
+              Linear chain: drag nodes and connect in sequence
+            </Panel>
+            <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="rgba(0,0,0,0.08)" />
+            <MiniMap
+              zoomable
+              pannable
+              nodeStrokeWidth={2}
+              nodeColor={(node) => getNodeColor((node as PipelineNode).data.algorithm)}
+            />
+            <Controls showInteractive={false} />
+          </ReactFlow>
+        </main>
       </div>
     </section>
+  );
+}
+
+export default function Pipeline() {
+  return (
+    <ReactFlowProvider>
+      <GraphEditor />
+    </ReactFlowProvider>
   );
 }
