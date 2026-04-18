@@ -254,10 +254,6 @@ function evaluatePipeline(source: string, nodes: PipelineNode[], edges: Pipeline
   };
 }
 
-function formatOutput(value: string): string {
-  return value.length ? value : "[empty output]";
-}
-
 function getNodeColor(algorithm: AlgorithmId): string {
   switch (algorithm) {
     case "caesar":
@@ -449,7 +445,7 @@ function CipherNode({
               <p className="text-[11px] uppercase tracking-[0.28em] text-gray-500">{algorithmLabels[nodeData.algorithm]}</p>
               <p className="mt-1 text-sm font-medium text-gray-900">{nodeData.mode === "encrypt" ? "Encrypt" : "Decrypt"}</p>
             </div>
-            <div className="flex flex-col items-end gap-1">
+            <div className="flex flex-row items-center justify-center  gap-1">
               <span className="rounded-full border border-gray-300 bg-amber-100 px-2 py-1 text-[10px] text-amber-700 font-semibold">Pipeline</span>
               {nodeData.pipelineNumber !== undefined && (
                 <span className="rounded-full border border-amber-400 bg-amber-200 px-2 py-0.5 text-[9px] text-amber-900 font-bold">
@@ -500,14 +496,11 @@ function GraphEditor() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<PipelineEdge>(starterGraph.edges);
   const [source, setSource] = useState("HELLO WORLD");
   const [selectedNodeId, setSelectedNodeId] = useState<string>(starterGraph.nodes[0]?.id ?? "");
-  const [lastRun, setLastRun] = useState<PipelineRun>(() => evaluatePipeline(source, starterGraph.nodes, starterGraph.edges));
   const [isRunning, setIsRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<"idle" | "success" | "error">("idle");
   const [globalMode, setGlobalMode] = useState<"forward" | "reverse">("forward");
   const [editingNodeId, setEditingNodeId] = useState<string | undefined>(undefined);
   const { screenToFlowPosition } = useReactFlow();
-
-  const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
 
   const updateNode = useCallback(
     (nodeId: string, updater: (node: PipelineNode) => PipelineNode) => {
@@ -618,17 +611,6 @@ function GraphEditor() {
     [setEdges, setNodes, updatePipelineNumbers],
   );
 
-  const updateSelectedNode = useCallback(
-    (updater: (node: PipelineNode) => PipelineNode) => {
-      if (!selectedNodeId) {
-        return;
-      }
-
-      updateNode(selectedNodeId, updater);
-    },
-    [selectedNodeId, updateNode],
-  );
-
   const onConnect = useCallback(
     (connection: Connection) => {
       if (!connection.source || !connection.target) {
@@ -694,7 +676,6 @@ function GraphEditor() {
       // Simulate async operation with minimal delay for feedback
       await new Promise(resolve => setTimeout(resolve, 300));
       const result = evaluatePipeline(source, nodes, edges);
-      setLastRun(result);
       
       // Update nodes with results and mark terminal nodes
       const terminals = identifyTerminalNodes(nodes, edges);
@@ -770,26 +751,31 @@ function GraphEditor() {
     <section
       className="min-h-screen px-4 py-6 text-gray-900 sm:px-6 lg:px-8 bg-white"
     >
-      <div className="mx-auto grid min-h-[calc(100vh-3rem)] w-full gap-4 xl:grid-cols-[300px_minmax(0,1fr)]" style={{ maxWidth: 1600 }}>
-        <aside className="flex flex-col gap-4 rounded-3xl border border-gray-300 bg-gray-50 p-4 shadow-lg">
+      <div className="mx-auto grid h-[calc(100vh-3rem)] w-full gap-4 xl:grid-cols-[300px_minmax(0,1fr)]" style={{ maxWidth: 1600 }}>
+        <aside className="flex flex-col gap-4 rounded-3xl border border-gray-300 bg-gray-50 p-4 shadow-lg overflow-y-auto">
           <div>
             <div className="flex items-center justify-between gap-2 mb-2">
               <div>
                 <p className="text-xs uppercase tracking-[0.35em] text-amber-700 font-semibold">Cipher pipeline</p>
                 <p className="mt-1 text-sm leading-5 text-gray-600">Connect nodes, toggle mode, press Delete to remove.</p>
               </div>
-              <button
+              
+            </div>
+            <div>
+            <p className="text-xs text-gray-500 mb-3">Click the button to toggle between Encrypt and Decrypt mode for all nodes</p>
+          <button
                 type="button"
                 onClick={toggleMode}
-                className={`rounded-full px-2.5 py-1 text-xs font-semibold transition whitespace-nowrap ${
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition whitespace-nowrap border-2 cursor-pointer ${
                   globalMode === "forward"
-                    ? "bg-blue-500 text-white hover:bg-blue-600"
-                    : "bg-purple-500 text-white hover:bg-purple-600"
+                    ? "border-amber-500 bg-amber-100 text-amber-900 hover:bg-amber-200"
+                    : "border-orange-500 bg-orange-100 text-orange-900 hover:bg-orange-200"
                 }`}
+                title="Click to toggle between Encrypt and Decrypt mode"
               >
-                {globalMode === "forward" ? "→ Forward" : "← Reverse"}
+                {globalMode === "forward" ? "🔒 Encrypt" : "🔓 Decrypt"}
               </button>
-            </div>
+              </div>
           </div>
 
           <div className="space-y-2 rounded-2xl border border-gray-300 bg-white p-3 shadow-sm">
@@ -835,53 +821,6 @@ function GraphEditor() {
             />
           </div>
 
-          <div className="rounded-2xl border-2 border-amber-500 bg-amber-50 p-3 shadow-sm">
-            <div className="mb-3">
-              <p className="text-xs uppercase tracking-[0.3em] text-amber-900 font-semibold">Pipeline Output</p>
-              <p className="text-sm text-amber-800 font-mono mt-2 p-2 bg-white rounded border border-amber-200 wrap-break-word">{formatOutput(lastRun.finalOutput)}</p>
-            </div>
-            {lastRun.nodes.length > 0 && (
-              <div className="border-t border-amber-200 pt-3">
-                <p className="text-xs uppercase tracking-[0.3em] text-amber-900 font-semibold mb-2">Intermediate Results</p>
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {(() => {
-                    const pipelineMap = identifyPipelines(nodes, edges);
-                    const grouped = new Map<number, NodeResult[]>();
-                    lastRun.nodes.forEach((result) => {
-                      const pipelineIdx = pipelineMap.get(result.id) ?? 0;
-                      if (!grouped.has(pipelineIdx)) {
-                        grouped.set(pipelineIdx, []);
-                      }
-                      grouped.get(pipelineIdx)!.push(result);
-                    });
-
-                    return Array.from(grouped.entries()).map(([pipelineIdx, results]) => (
-                      <div key={pipelineIdx}>
-                        {grouped.size > 1 && (
-                          <p className="text-xs font-semibold text-amber-800 mb-1 mt-2">Pipeline {pipelineIdx + 1}</p>
-                        )}
-                        {results.map((result, stepIdx) => (
-                          <div key={result.id} className="rounded border border-amber-200 bg-white p-2 mb-2">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
-                                {grouped.size > 1 ? `P${pipelineIdx + 1}-${stepIdx + 1}` : stepIdx + 1}
-                              </span>
-                              <span className="text-xs font-medium text-gray-700">{algorithmLabels[result.algorithm]} ({result.mode})</span>
-                            </div>
-                            <div className="text-xs text-gray-600 space-y-1">
-                              <div><span className="font-semibold">In:</span> <span className="text-gray-800 font-mono">{result.input.substring(0, 30)}{result.input.length > 30 ? "..." : ""}</span></div>
-                              <div><span className="font-semibold">Out:</span> <span className="text-gray-800 font-mono">{result.output.substring(0, 30)}{result.output.length > 30 ? "..." : ""}</span></div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ));
-                  })()}
-                </div>
-              </div>
-            )}
-          </div>
-
           <div className="space-y-2 rounded-2xl border border-gray-300 bg-white p-3 shadow-sm">
             <p className="text-xs uppercase tracking-[0.3em] text-gray-600 font-medium">Algorithm library</p>
             <div className="grid gap-2">
@@ -909,162 +848,10 @@ function GraphEditor() {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-gray-300 bg-white p-3 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-gray-600 font-medium">Selected node</p>
-                <p className="text-sm text-gray-900 font-semibold">{selectedNode ? algorithmLabels[selectedNode.data.algorithm] : "None"}</p>
-              </div>
-              {selectedNode ? (
-                <button
-                  type="button"
-                  onClick={() => deleteNode(selectedNode.id)}
-                  className="rounded-full border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"
-                >
-                  Delete
-                </button>
-              ) : null}
-            </div>
 
-            {selectedNode ? (
-              <div className="mt-3 space-y-3">
-                <label className="block space-y-1 text-sm">
-                  <span className="text-gray-700 font-medium">Type</span>
-                  <select
-                    value={selectedNode.data.algorithm}
-                    onChange={(event) =>
-                      updateSelectedNode((current) => {
-                        const algorithm = event.target.value as AlgorithmId;
-                        const params = createDefaultsFor(algorithm);
-                        return {
-                          ...current,
-                          data: {
-                            ...current.data,
-                            algorithm,
-                            params,
-                            summary: buildSummary(algorithm, current.data.mode, params),
-                          },
-                        };
-                      })
-                    }
-                    className="w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
-                  >
-                    {algorithmOptions.map((algorithm) => (
-                      <option key={algorithm} value={algorithm}>
-                        {algorithmLabels[algorithm]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                {selectedNode.data.algorithm === "caesar" ? (
-                  <label className="block space-y-1 text-sm">
-                    <span className="text-gray-700 font-medium">Shift</span>
-                    <input
-                      type="number"
-                      value={selectedNode.data.params.shift}
-                      onChange={(event) =>
-                        updateSelectedNode((current) => {
-                          const params = { ...current.data.params, shift: Number(event.target.value) || 0 };
-                          return {
-                            ...current,
-                            data: {
-                              ...current.data,
-                              params,
-                              summary: buildSummary(current.data.algorithm, current.data.mode, params),
-                            },
-                          };
-                        })
-                      }
-                      className="w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
-                    />
-                  </label>
-                ) : null}
-
-                {selectedNode.data.algorithm === "vigenere" || selectedNode.data.algorithm === "columnar" || selectedNode.data.algorithm === "xor" ? (
-                  <label className="block space-y-1 text-sm">
-                    <span className="text-gray-700 font-medium">Key</span>
-                    <input
-                      type="text"
-                      value={selectedNode.data.params.key}
-                      onChange={(event) =>
-                        updateSelectedNode((current) => {
-                          const params = { ...current.data.params, key: event.target.value };
-                          return {
-                            ...current,
-                            data: {
-                              ...current.data,
-                              params,
-                              summary: buildSummary(current.data.algorithm, current.data.mode, params),
-                            },
-                          };
-                        })
-                      }
-                      className="w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
-                    />
-                  </label>
-                ) : null}
-
-                {selectedNode.data.algorithm === "railFence" ? (
-                  <label className="block space-y-1 text-sm">
-                    <span className="text-gray-700 font-medium">Rails</span>
-                    <input
-                      type="number"
-                      min={2}
-                      value={selectedNode.data.params.rails}
-                      onChange={(event) =>
-                        updateSelectedNode((current) => {
-                          const params = { ...current.data.params, rails: Number(event.target.value) || 2 };
-                          return {
-                            ...current,
-                            data: {
-                              ...current.data,
-                              params,
-                              summary: buildSummary(current.data.algorithm, current.data.mode, params),
-                            },
-                          };
-                        })
-                      }
-                      className="w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
-                    />
-                  </label>
-                ) : null}
-
-                {selectedNode.data.algorithm === "substitution" ? (
-                  <label className="block space-y-1 text-sm">
-                    <span className="text-gray-700 font-medium">Alphabet</span>
-                    <input
-                      type="text"
-                      maxLength={26}
-                      value={selectedNode.data.params.alphabet}
-                      onChange={(event) =>
-                        updateSelectedNode((current) => {
-                          const params = { ...current.data.params, alphabet: event.target.value.toUpperCase() };
-                          return {
-                            ...current,
-                            data: {
-                              ...current.data,
-                              params,
-                              summary: buildSummary(current.data.algorithm, current.data.mode, params),
-                            },
-                          };
-                        })
-                      }
-                      className="w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
-                    />
-                  </label>
-                ) : null}
-
-                <div className="rounded-2xl border border-gray-300 bg-gray-100 p-3">
-                  <p className="text-xs uppercase tracking-[0.3em] text-gray-600 font-medium">Summary</p>
-                  <p className="mt-2 text-sm text-gray-900">{selectedNode.data.summary}</p>
-                </div>
-              </div>
-            ) : null}
-          </div>
         </aside>
 
-        <main className="relative min-h-[70vh] overflow-hidden rounded-3xl border border-gray-300 bg-gray-50 shadow-lg">
+        <main className="relative h-full overflow-hidden rounded-3xl border border-gray-300 bg-gray-50 shadow-lg">
           <ReactFlow
             nodes={nodes}
             edges={edges}
