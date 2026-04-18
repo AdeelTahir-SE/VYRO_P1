@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import "@xyflow/react/dist/style.css";
 import {
   Background,
@@ -44,6 +44,9 @@ type CipherNodeData = {
   mode: NodeMode;
   params: NodeParams;
   summary: string;
+  result?: string;
+  isTerminal?: boolean;
+  pipelineNumber?: number;
 };
 
 type PipelineNode = Node<CipherNodeData>;
@@ -274,6 +277,51 @@ function getNodeColor(algorithm: AlgorithmId): string {
   }
 }
 
+function identifyPipelines(nodes: PipelineNode[], edges: PipelineEdge[]): Map<string, number> {
+  const incoming = new Map<string, string>();
+  const outgoing = new Map<string, string>();
+
+  edges.forEach((edge) => {
+    incoming.set(edge.target, edge.source);
+    outgoing.set(edge.source, edge.target);
+  });
+
+  const pipelineMap = new Map<string, number>();
+  let pipelineIndex = 0;
+
+  // Find all start nodes (no incoming edges)
+  nodes.forEach((node) => {
+    if (!incoming.has(node.id)) {
+      // Follow the chain from this start node
+      let currentId: string | undefined = node.id;
+      while (currentId && !pipelineMap.has(currentId)) {
+        pipelineMap.set(currentId, pipelineIndex);
+        currentId = outgoing.get(currentId);
+      }
+      pipelineIndex++;
+    }
+  });
+
+  return pipelineMap;
+}
+
+function identifyTerminalNodes(nodes: PipelineNode[], edges: PipelineEdge[]): Set<string> {
+  const outgoing = new Map<string, string>();
+  
+  edges.forEach((edge) => {
+    outgoing.set(edge.source, edge.target);
+  });
+
+  const terminals = new Set<string>();
+  nodes.forEach((node) => {
+    if (!outgoing.has(node.id)) {
+      terminals.add(node.id);
+    }
+  });
+
+  return terminals;
+}
+
 function CipherNode({ data, selected }: NodeProps) {
   const nodeData = data as CipherNodeData;
 
@@ -292,9 +340,24 @@ function CipherNode({ data, selected }: NodeProps) {
           <p className="text-[11px] uppercase tracking-[0.28em] text-gray-500">{algorithmLabels[nodeData.algorithm]}</p>
           <p className="mt-1 text-sm font-medium text-gray-900">{nodeData.mode === "encrypt" ? "Encrypt" : "Decrypt"}</p>
         </div>
-        <span className="rounded-full border border-gray-300 bg-amber-100 px-2 py-1 text-[10px] text-amber-700 font-semibold">Pipeline</span>
+        <div className="flex flex-col items-end gap-1">
+          <span className="rounded-full border border-gray-300 bg-amber-100 px-2 py-1 text-[10px] text-amber-700 font-semibold">Pipeline</span>
+          {nodeData.pipelineNumber !== undefined && (
+            <span className="rounded-full border border-amber-400 bg-amber-200 px-2 py-0.5 text-[9px] text-amber-900 font-bold">
+              #{nodeData.pipelineNumber + 1}
+            </span>
+          )}
+        </div>
       </div>
       <p className="mt-3 text-xs leading-5 text-gray-600">{nodeData.summary}</p>
+      {nodeData.result && (
+        <div className="mt-3 rounded bg-amber-50 border border-amber-200 p-2">
+          <p className="text-[10px] font-semibold text-amber-900">
+            {nodeData.isTerminal ? "Final result" : "Intermediate result"}:
+          </p>
+          <p className="text-xs text-amber-900 font-mono mt-1 wrap-break-word">{nodeData.result.substring(0, 40)}{nodeData.result.length > 40 ? "..." : ""}</p>
+        </div>
+      )}
       <Handle type="source" position={Position.Right} className="h-3! w-3! border-none! bg-amber-500!" />
     </div>
   );
@@ -328,6 +391,7 @@ function GraphEditor() {
   const [lastRun, setLastRun] = useState<PipelineRun>(() => evaluatePipeline(source, starterGraph.nodes, starterGraph.edges));
   const [isRunning, setIsRunning] = useState(false);
   const [runStatus, setRunStatus] = useState<"idle" | "success" | "error">("idle");
+  const [globalMode, setGlobalMode] = useState<"forward" | "reverse">("forward");
   const { screenToFlowPosition } = useReactFlow();
 
   const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedNodeId) ?? null, [nodes, selectedNodeId]);
@@ -341,24 +405,67 @@ function GraphEditor() {
     [setNodes],
   );
 
+  const updatePipelineNumbers = useCallback(
+    (nodesList: PipelineNode[]) => {
+      const pipelineMap = identifyPipelines(nodesList, edges);
+      return nodesList.map((node: PipelineNode) => ({
+        ...node,
+        data: {
+          ...node.data,
+          pipelineNumber: pipelineMap.get(node.id),
+        },
+      }));
+    },
+    [edges],
+  );
+
   const addNodeToCanvas = useCallback(
     (algorithm: AlgorithmId, position?: { x: number; y: number }) => {
       const lastNode = nodes[nodes.length - 1];
       const fallbackPosition = lastNode ? { x: lastNode.position.x + 260, y: lastNode.position.y } : { x: 120, y: 120 };
-      const node = createNode(algorithm, position ?? fallbackPosition);
-      setNodes((current: PipelineNode[]) => [...current, node]);
+      const params = createDefaultsFor(algorithm);
+      const mode: NodeMode = globalMode === "forward" ? "encrypt" : "decrypt";
+      const node: PipelineNode = {
+        id: createId(),
+        type: "cipher",
+        position: position ?? fallbackPosition,
+        data: {
+          algorithm,
+          mode,
+          params,
+          summary: buildSummary(algorithm, mode, params),
+        },
+      };
+      setNodes((current: PipelineNode[]) => {
+        const newNodes = [
+          ...current.map((n: PipelineNode) => ({
+            ...n,
+            data: { ...n.data, result: undefined, isTerminal: undefined },
+          })),
+          node,
+        ];
+        return updatePipelineNumbers(newNodes);
+      });
       setSelectedNodeId(node.id);
     },
-    [nodes, setNodes],
+    [nodes, setNodes, globalMode, updatePipelineNumbers],
   );
 
   const deleteNode = useCallback(
     (nodeId: string) => {
-      setNodes((current: PipelineNode[]) => current.filter((node: PipelineNode) => node.id !== nodeId));
+      setNodes((current: PipelineNode[]) => {
+        const filtered = current
+          .filter((node: PipelineNode) => node.id !== nodeId)
+          .map((node: PipelineNode) => ({
+            ...node,
+            data: { ...node.data, result: undefined, isTerminal: undefined },
+          }));
+        return updatePipelineNumbers(filtered);
+      });
       setEdges((current: PipelineEdge[]) => current.filter((edge: PipelineEdge) => edge.source !== nodeId && edge.target !== nodeId));
       setSelectedNodeId((current) => (current === nodeId ? "" : current));
     },
-    [setEdges, setNodes],
+    [setEdges, setNodes, updatePipelineNumbers],
   );
 
   const updateSelectedNode = useCallback(
@@ -394,8 +501,18 @@ function GraphEditor() {
         const linearFiltered = filtered.filter((edge: PipelineEdge) => edge.source !== connection.source);
         return [...linearFiltered, { id: createId(), ...connectionEdge }];
       });
+
+      // Clear results when edges change and update pipeline numbers
+      setNodes((current: PipelineNode[]) =>
+        updatePipelineNumbers(
+          current.map((node: PipelineNode) => ({
+            ...node,
+            data: { ...node.data, result: undefined, isTerminal: undefined },
+          }))
+        )
+      );
     },
-    [setEdges],
+    [setEdges, setNodes, updatePipelineNumbers],
   );
 
   const onDrop = useCallback(
@@ -426,7 +543,29 @@ function GraphEditor() {
     try {
       // Simulate async operation with minimal delay for feedback
       await new Promise(resolve => setTimeout(resolve, 300));
-      setLastRun(evaluatePipeline(source, nodes, edges));
+      const result = evaluatePipeline(source, nodes, edges);
+      setLastRun(result);
+      
+      // Update nodes with results and mark terminal nodes
+      const terminals = identifyTerminalNodes(nodes, edges);
+      const resultMap = new Map(result.nodes.map((r) => [r.id, r]));
+      
+      setNodes((current: PipelineNode[]) =>
+        updatePipelineNumbers(
+          current.map((node: PipelineNode) => {
+            const nodeResult = resultMap.get(node.id);
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                result: nodeResult?.output,
+                isTerminal: terminals.has(node.id),
+              },
+            };
+          })
+        )
+      );
+      
       setRunStatus("success");
       
       // Clear success status after 2 seconds
@@ -437,7 +576,7 @@ function GraphEditor() {
     } finally {
       setIsRunning(false);
     }
-  }, [edges, nodes, source, isRunning]);
+  }, [edges, nodes, source, isRunning, setNodes, updatePipelineNumbers]);
 
   const onNodeDragStop = useCallback(
     (_: React.MouseEvent, node: PipelineNode) => {
@@ -446,6 +585,37 @@ function GraphEditor() {
     [updateNode],
   );
 
+  const toggleMode = useCallback(() => {
+    const newMode = globalMode === "forward" ? "reverse" : "forward";
+    setGlobalMode(newMode);
+    const newNodeMode: NodeMode = newMode === "forward" ? "encrypt" : "decrypt";
+    
+    setNodes((current: PipelineNode[]) =>
+      updatePipelineNumbers(
+        current.map((node: PipelineNode) => ({
+          ...node,
+          data: {
+            ...node.data,
+            mode: newNodeMode,
+            summary: buildSummary(node.data.algorithm, newNodeMode, node.data.params),
+          },
+        }))
+      )
+    );
+  }, [globalMode, setNodes, updatePipelineNumbers]);
+
+  // Handle keyboard Delete key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Delete" && selectedNodeId) {
+        deleteNode(selectedNodeId);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedNodeId, deleteNode]);
+
   return (
     <section
       className="min-h-screen px-4 py-6 text-gray-900 sm:px-6 lg:px-8 bg-white"
@@ -453,8 +623,23 @@ function GraphEditor() {
       <div className="mx-auto grid min-h-[calc(100vh-3rem)] w-full gap-4 xl:grid-cols-[300px_minmax(0,1fr)]" style={{ maxWidth: 1600 }}>
         <aside className="flex flex-col gap-4 rounded-3xl border border-gray-300 bg-gray-50 p-4 shadow-lg">
           <div>
-            <p className="text-xs uppercase tracking-[0.35em] text-amber-700 font-semibold">Cipher pipeline</p>
-            <p className="mt-2 text-sm leading-6 text-gray-600">Drag algorithms onto the canvas, connect them in a linear chain, then edit the selected node here.</p>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <div>
+                <p className="text-xs uppercase tracking-[0.35em] text-amber-700 font-semibold">Cipher pipeline</p>
+                <p className="mt-1 text-sm leading-5 text-gray-600">Connect nodes, toggle mode, press Delete to remove.</p>
+              </div>
+              <button
+                type="button"
+                onClick={toggleMode}
+                className={`rounded-full px-2.5 py-1 text-xs font-semibold transition whitespace-nowrap ${
+                  globalMode === "forward"
+                    ? "bg-blue-500 text-white hover:bg-blue-600"
+                    : "bg-purple-500 text-white hover:bg-purple-600"
+                }`}
+              >
+                {globalMode === "forward" ? "→ Forward" : "← Reverse"}
+              </button>
+            </div>
           </div>
 
           <div className="space-y-2 rounded-2xl border border-gray-300 bg-white p-3 shadow-sm">
@@ -482,7 +667,18 @@ function GraphEditor() {
             </div>
             <textarea
               value={source}
-              onChange={(event) => setSource(event.target.value)}
+              onChange={(event) => {
+                setSource(event.target.value);
+                // Clear results when source changes
+                setNodes((current: PipelineNode[]) =>
+                  updatePipelineNumbers(
+                    current.map((node: PipelineNode) => ({
+                      ...node,
+                      data: { ...node.data, result: undefined, isTerminal: undefined },
+                    }))
+                  )
+                );
+              }}
               rows={4}
               className="w-full rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 outline-none placeholder:text-gray-400 focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
               placeholder="Type the text to process"
@@ -498,18 +694,39 @@ function GraphEditor() {
               <div className="border-t border-amber-200 pt-3">
                 <p className="text-xs uppercase tracking-[0.3em] text-amber-900 font-semibold mb-2">Intermediate Results</p>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {lastRun.nodes.map((result, idx) => (
-                    <div key={result.id} className="rounded border border-amber-200 bg-white p-2">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">{idx + 1}</span>
-                        <span className="text-xs font-medium text-gray-700">{algorithmLabels[result.algorithm]} ({result.mode})</span>
+                  {(() => {
+                    const pipelineMap = identifyPipelines(nodes, edges);
+                    const grouped = new Map<number, NodeResult[]>();
+                    lastRun.nodes.forEach((result) => {
+                      const pipelineIdx = pipelineMap.get(result.id) ?? 0;
+                      if (!grouped.has(pipelineIdx)) {
+                        grouped.set(pipelineIdx, []);
+                      }
+                      grouped.get(pipelineIdx)!.push(result);
+                    });
+
+                    return Array.from(grouped.entries()).map(([pipelineIdx, results]) => (
+                      <div key={pipelineIdx}>
+                        {grouped.size > 1 && (
+                          <p className="text-xs font-semibold text-amber-800 mb-1 mt-2">Pipeline {pipelineIdx + 1}</p>
+                        )}
+                        {results.map((result, stepIdx) => (
+                          <div key={result.id} className="rounded border border-amber-200 bg-white p-2 mb-2">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-xs font-semibold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
+                                {grouped.size > 1 ? `P${pipelineIdx + 1}-${stepIdx + 1}` : stepIdx + 1}
+                              </span>
+                              <span className="text-xs font-medium text-gray-700">{algorithmLabels[result.algorithm]} ({result.mode})</span>
+                            </div>
+                            <div className="text-xs text-gray-600 space-y-1">
+                              <div><span className="font-semibold">In:</span> <span className="text-gray-800 font-mono">{result.input.substring(0, 30)}{result.input.length > 30 ? "..." : ""}</span></div>
+                              <div><span className="font-semibold">Out:</span> <span className="text-gray-800 font-mono">{result.output.substring(0, 30)}{result.output.length > 30 ? "..." : ""}</span></div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                      <div className="text-xs text-gray-600 space-y-1">
-                        <div><span className="font-semibold">In:</span> <span className="text-gray-800 font-mono">{result.input.substring(0, 30)}{result.input.length > 30 ? "..." : ""}</span></div>
-                        <div><span className="font-semibold">Out:</span> <span className="text-gray-800 font-mono">{result.output.substring(0, 30)}{result.output.length > 30 ? "..." : ""}</span></div>
-                      </div>
-                    </div>
-                  ))}
+                    ));
+                  })()}
                 </div>
               </div>
             )}
@@ -588,35 +805,6 @@ function GraphEditor() {
                       </option>
                     ))}
                   </select>
-                </label>
-
-                <label className="block space-y-1 text-sm">
-                  <span className="text-gray-700 font-medium">Mode</span>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(["encrypt", "decrypt"] as NodeMode[]).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() =>
-                          updateSelectedNode((current) => ({
-                            ...current,
-                            data: {
-                              ...current.data,
-                              mode,
-                              summary: buildSummary(current.data.algorithm, mode, current.data.params),
-                            },
-                          }))
-                        }
-                        className={`rounded-2xl border px-3 py-2 text-sm transition ${
-                          selectedNode.data.mode === mode
-                            ? "border-amber-500 bg-amber-100 text-amber-900 font-medium"
-                            : "border-gray-300 bg-gray-100 text-gray-700 hover:border-amber-300"
-                        }`}
-                      >
-                        {mode === "encrypt" ? "Encrypt" : "Decrypt"}
-                      </button>
-                    ))}
-                  </div>
                 </label>
 
                 {selectedNode.data.algorithm === "caesar" ? (
