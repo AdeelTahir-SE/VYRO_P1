@@ -1,36 +1,63 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 🔐 CipherStack – Cascade Encryption Builder
 
-## Getting Started
+CipherStack is a **node-based cascade encryption tool** that allows users to visually build encryption pipelines by chaining multiple cipher algorithms together.
 
-First, run the development server:
+It demonstrates the concept of **cascade encryption**, where plaintext is transformed through multiple layers of encryption, increasing security and complexity.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+---
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 🚀 Features
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- 🔗 Build a pipeline of multiple cipher algorithms
+- ⚙️ Configure each cipher independently
+- 🔄 Reorder, add, and remove nodes dynamically
+- 🔍 View intermediate outputs at each step
+- 🔐 Encrypt plaintext through the pipeline
+- 🔓 Decrypt ciphertext using reverse pipeline
+- ✅ Guaranteed round-trip correctness (Encrypt → Decrypt = Original Text)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+---
 
-## Learn More
+## 🧠 Supported Cipher Algorithms
 
-To learn more about Next.js, take a look at the following resources:
+| Algorithm               | Description                                                                 | Configuration |
+|------------------------|-----------------------------------------------------------------------------|--------------|
+| Caesar Cipher          | Shifts each letter by N positions in the alphabet                          | Shift (int)  |
+| XOR Cipher             | XORs each byte with a repeating key                                        | Key (string) |
+| Vigenère Cipher        | Polyalphabetic substitution using a keyword                                | Keyword      |
+| Rail Fence Cipher      | Zigzag transposition across N rails                                         | Rails (int)  |
+| Substitution Cipher    | Custom alphabet mapping                                                     | 26-char map  |
+| Columnar Transposition | Rearranges text using column order defined by keyword                      | Keyword      |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 🔁 How It Works
 
-## Deploy on Vercel
+### Encryption Flow
+1. Input plaintext enters the first node  
+2. Each node processes the output of the previous node  
+3. Final node produces the ciphertext  
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Decryption Flow
+1. Ciphertext enters the last node  
+2. Pipeline runs in reverse order  
+3. Each cipher applies its inverse operation  
+4. Final output = original plaintext  
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+---
+
+## 🧪 Example
+
+### Pipeline:
+
+Caesar (shift 3) → XOR (key: abc) → Vigenère (key: secret)
+
+
+### Encryption:
+
+hello → khoor → (xor output) → (final ciphertext)
+
+
+### Decryption:
+
+(final ciphertext) → (xor output) → khoor → hello
